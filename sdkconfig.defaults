@@ -1,0 +1,17 @@
+# Default sdkconfig values applied on first `idf.py menuconfig` / `build`.
+# Override locally via menuconfig — these are just sane starting points.
+
+# Boot verbosity: keep INFO so MQTT / WiFi state changes are visible on monitor
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_DEFAULT_LEVEL=3
+
+# Watchdog — we use esp_task_wdt in the hunter_cmd task
+CONFIG_TASK_WDT_TIMEOUT_S=30
+
+# FreeRTOS — pin WiFi to CPU0, our task to CPU1 for clean RMT timing
+CONFIG_FREERTOS_UNICORE=n
+
+# Reduce binary size by trimming features we don't use
+CONFIG_BT_ENABLED=n
+CONFIG_BLUETOOTH_ENABLED=n
+CONFIG_BLE_ENABLED=n

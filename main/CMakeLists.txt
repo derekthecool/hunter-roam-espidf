@@ -1,0 +1,21 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "wifi.c"
+        "mqtt.c"
+        "hunter_cmd.c"
+        "ota.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        hunter_rmt
+        esp_wifi
+        esp_event
+        esp_netif
+        mqtt
+        nvs_flash
+        esp_https_ota
+        esp_hw_support
+        esp_system
+        bootloader_support
+        cjson
+)

@@ -1,0 +1,8 @@
+menu "Hunter RMT"
+    config HUNTER_RMT_GPIO
+        int "GPIO pin connected to REM"
+        default 4
+        help
+            The GPIO that drives the Hunter controller's REM terminal.
+            Default is GPIO 4 — any free output-capable GPIO works.
+endmenu

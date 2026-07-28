@@ -1,0 +1,52 @@
+menu "Hunter WiFi/MQTT"
+    config HUNTER_WIFI_SSID
+        string "WiFi SSID"
+        default ""
+        help
+            SSID of the WiFi network the device joins.
+
+    config HUNTER_WIFI_PASSWORD
+        string "WiFi Password"
+        default ""
+
+    config HUNTER_HOSTNAME
+        string "MQTT hostname prefix"
+        default "hunter-x2"
+        help
+            Used as the MQTT topic prefix and the default device name in HA.
+            Topics become hunter/<hostname>/zone/<N>/set etc.
+
+    config HUNTER_MQTT_BROKER_URI
+        string "MQTT broker URI"
+        default "mqtt://192.168.1.103:1883"
+
+    config HUNTER_MQTT_USER
+        string "MQTT username"
+        default ""
+
+    config HUNTER_MQTT_PASSWORD
+        string "MQTT password"
+        default ""
+
+    config HUNTER_ZONE_COUNT
+        int "Number of zones"
+        default 8
+        range 1 48
+        help
+            Each zone N in [1, ZONE_COUNT] gets a switch entity in HA
+            and a software safety-shutoff timer.
+endmenu
+
+menu "Hunter OTA"
+    config HUNTER_OTA_URL
+        string "OTA firmware URL (empty = disable)"
+        default ""
+        help
+            If non-empty, the firmware checks this URL on boot
+            (when HUNTER_OTA_CHECK_ON_BOOT is set) and on MQTT
+            "cmd" topic {"action":"ota"} command.
+
+    config HUNTER_OTA_CHECK_ON_BOOT
+        bool "Check for update on every boot"
+        default n
+endmenu

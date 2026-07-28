@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-firmware:
+    name: Build firmware (esp32)
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:release-v6.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py set-target esp32
+          idf.py build
+
+      - name: Upload firmware artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-bin
+          path: |
+            build/hunter-roam-espidf.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+          if-no-files-found: warn
+
+  unit-tests:
+    name: Unit tests (linux host)
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:release-v6.0
+    steps:
+      - uses: actions/checkout@v4
+
+      # The unit tests are a standalone CMake build — they don't use idf.py.
+      # They compile hunter_rmt.c (with CONFIG_IDF_TARGET_LINUX=1) against
+      # unity sources shipped inside the ESP-IDF container.
+      - name: Build & run tests
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          cd components/hunter_rmt/test
+          cmake -B build
+          cmake --build build
+          ./build/hunter_rmt_test
