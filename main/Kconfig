@@ -50,3 +50,18 @@ menu "Hunter OTA"
         bool "Check for update on every boot"
         default n
 endmenu
+
+menu "Hunter Status LED"
+    config HUNTER_STATUS_LED_GPIO
+        int "Status LED GPIO"
+        default 2
+        help
+            GPIO driving the status indicator LED. Defaults to GPIO 2,
+            which is the built-in LED on most ESP32 DevKitC boards
+            (also NodeMCU-32S, Wemos D1 Mini ESP32, etc.). Other boards:
+              ESP32-C3 DevKit  → GPIO 8
+              ESP32-S3 DevKit  → GPIO 48
+              ESP32-C6 XIAO    → GPIO 15
+
+            Set to -1 to disable the status LED entirely.
+endmenu

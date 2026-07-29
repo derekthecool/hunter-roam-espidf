@@ -75,6 +75,16 @@ static void publish_ha_discovery(void)
         cJSON_AddBoolToObject  (root, "pl_opt", true);
         cJSON_AddStringToObject(root, "ic", "mdi:sprinkler-variant");
 
+        // Group all zones under one HA device so the Appliances dashboard
+        // can show them as a single device with 8 switches.
+        cJSON *device = cJSON_CreateObject();
+        cJSON_AddStringToObject(device, "ids", s_unique_prefix);  // stable ID
+        cJSON_AddStringToObject(device, "name", CONFIG_HUNTER_HOSTNAME);
+        cJSON_AddStringToObject(device, "mf", "Hunter");
+        cJSON_AddStringToObject(device, "mdl", "X2 (via ESP32)");
+        cJSON_AddStringToObject(device, "sw", "hunter-roam-espidf v0.1.0");
+        cJSON_AddItemToObject(root, "device", device);
+
         char *json = cJSON_PrintUnformatted(root);
 
         esp_mqtt_client_publish(s_client, topic, json, 0, 1, 1);

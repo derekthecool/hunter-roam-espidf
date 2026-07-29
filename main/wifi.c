@@ -6,6 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "nvs_flash.h"
+#include "status_led.h"
 #include <string.h>
 
 static const char *TAG = "wifi";
@@ -25,6 +26,7 @@ static void event_handler(void *arg, esp_event_base_t base,
         case WIFI_EVENT_STA_DISCONNECTED:
             ESP_LOGW(TAG, "disconnected — retrying");
             xEventGroupClearBits(s_eg, WIFI_CONNECTED_BIT);
+            status_led_set_mode(STATUS_LED_MODE_WIFI_DISCONNECTED);
             esp_wifi_connect();
             break;
         default:
@@ -34,6 +36,7 @@ static void event_handler(void *arg, esp_event_base_t base,
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "got IP " IPSTR, IP2STR(&e->ip_info.ip));
         xEventGroupSetBits(s_eg, WIFI_CONNECTED_BIT);
+        status_led_set_mode(STATUS_LED_MODE_WIFI_CONNECTED);
     }
 }
 

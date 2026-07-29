@@ -5,6 +5,7 @@ idf_component_register(
         "mqtt.c"
         "hunter_cmd.c"
         "ota.c"
+        "status_led.c"
     INCLUDE_DIRS "."
     REQUIRES
         hunter_rmt

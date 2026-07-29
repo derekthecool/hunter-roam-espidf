@@ -9,6 +9,7 @@
 #include "mqtt.h"
 #include "nvs_flash.h"
 #include "ota.h"
+#include "status_led.h"
 #include "wifi.h"
 
 static const char *TAG = "main";
@@ -46,6 +47,11 @@ void app_main(void)
 
     // 1. RMT driver (independent of WiFi/MQTT)
     ESP_ERROR_CHECK(hunter_rmt_init(CONFIG_HUNTER_RMT_GPIO));
+
+    // 1b. Status LED (starts in disconnected mode until WiFi comes up)
+    if (CONFIG_HUNTER_STATUS_LED_GPIO >= 0) {
+        ESP_ERROR_CHECK(status_led_init(CONFIG_HUNTER_STATUS_LED_GPIO));
+    }
 
     // 2. Command queue + safety timers + dispatch task
     ESP_ERROR_CHECK(hunter_cmd_init());

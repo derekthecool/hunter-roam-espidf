@@ -9,6 +9,7 @@
 #include "hunter_rmt.h"
 #include "mqtt.h"
 #include "ota.h"
+#include "status_led.h"
 #include <string.h>
 
 static const char *TAG = "hunter_cmd";
@@ -58,6 +59,10 @@ static void dispatch_zone_start(uint8_t zone, uint8_t minutes)
         ESP_LOGI(TAG, "zone %u → ON (%u min)", zone, minutes);
         mqtt_publish_zone_state(zone, true);
         arm_safety_timer(zone, minutes);
+        // Rapid-blink for the watering duration. minutes=0 (stop) is a no-op.
+        if (minutes > 0) {
+            status_led_command_pulse((uint32_t)minutes * 60 * 1000);
+        }
     } else {
         ESP_LOGE(TAG, "start_zone(%u, %u) failed: %d", zone, minutes, err);
     }
@@ -70,6 +75,8 @@ static void dispatch_zone_stop(uint8_t zone)
         ESP_LOGI(TAG, "zone %u → OFF", zone);
         mqtt_publish_zone_state(zone, false);
         disarm_safety_timer(zone);
+        // Stop cancels any active command pulse — the zone isn't running anymore.
+        status_led_cancel_pulse();
     } else {
         ESP_LOGE(TAG, "stop_zone(%u) failed: %d", zone, err);
     }
@@ -80,6 +87,11 @@ static void dispatch_program(uint8_t program)
     hunter_err_t err = hunter_rmt_run_program(program);
     ESP_LOGI(TAG, "program %u → %s", program,
              err == HUNTER_OK ? "triggered" : "FAIL");
+    // Hunter programs have unknown duration; show a 5-minute pulse so the
+    // operator can see *something* fired, then the LED returns to base.
+    if (err == HUNTER_OK) {
+        status_led_command_pulse(5 * 60 * 1000);
+    }
 }
 
 static void dispatch_stop_all(void)
