@@ -17,7 +17,10 @@
 
 static const char *TAG = "mqtt";
 
-#define DEFAULT_RUN_MINUTES  15
+// Current default watering duration (minutes). Updated via the HA number
+// entity "Watering Duration" and used when a start command arrives
+// without an explicit "time" field.
+static volatile uint8_t s_duration_minutes = CONFIG_HUNTER_DEFAULT_RUN_MINUTES;
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static char s_topic_prefix[64];   // "hunter/<hostname>"
@@ -43,15 +46,13 @@ static void publish_ha_discovery(void)
 {
     char topic[128];
 
+    // --- Zone switches ---
     for (uint8_t z = 1; z <= CONFIG_HUNTER_ZONE_COUNT; z++) {
         snprintf(topic, sizeof(topic),
                  "homeassistant/switch/%s_zone_%u/config", s_unique_prefix, z);
 
-        // cmd_t pl_on embeds the duration. pl_off just says stop.
-        char cmd_payload_on[40];
-        snprintf(cmd_payload_on, sizeof(cmd_payload_on),
-                 "{\"action\":\"start\",\"time\":%d}", DEFAULT_RUN_MINUTES);
-
+        // pl_on sends bare start (no time) — firmware uses the duration
+        // set via the number entity below (or Kconfig default).
         char name[40];
         snprintf(name, sizeof(name), "%s Zone %u", CONFIG_HUNTER_HOSTNAME, z);
 
@@ -70,15 +71,13 @@ static void publish_ha_discovery(void)
         snprintf(stat_t, sizeof(stat_t), "%s/zone/%u/state", s_topic_prefix, z);
         cJSON_AddStringToObject(root, "stat_t", stat_t);
 
-        cJSON_AddStringToObject(root, "pl_on",  cmd_payload_on);
+        cJSON_AddStringToObject(root, "pl_on",  "{\"action\":\"start\"}");
         cJSON_AddStringToObject(root, "pl_off", "{\"action\":\"stop\"}");
         cJSON_AddBoolToObject  (root, "pl_opt", true);
         cJSON_AddStringToObject(root, "ic", "mdi:sprinkler-variant");
 
-        // Group all zones under one HA device so the Appliances dashboard
-        // can show them as a single device with 8 switches.
         cJSON *device = cJSON_CreateObject();
-        cJSON_AddStringToObject(device, "ids", s_unique_prefix);  // stable ID
+        cJSON_AddStringToObject(device, "ids", s_unique_prefix);
         cJSON_AddStringToObject(device, "name", CONFIG_HUNTER_HOSTNAME);
         cJSON_AddStringToObject(device, "mf", "Hunter");
         cJSON_AddStringToObject(device, "mdl", "X2 (via ESP32)");
@@ -86,14 +85,59 @@ static void publish_ha_discovery(void)
         cJSON_AddItemToObject(root, "device", device);
 
         char *json = cJSON_PrintUnformatted(root);
-
         esp_mqtt_client_publish(s_client, topic, json, 0, 1, 1);
-
         free(json);
         cJSON_Delete(root);
     }
 
-    ESP_LOGI(TAG, "HA discovery published for %d zones", CONFIG_HUNTER_ZONE_COUNT);
+    // --- Duration number entity (one per device, not per zone) ---
+    snprintf(topic, sizeof(topic),
+             "homeassistant/number/%s_duration/config", s_unique_prefix);
+
+    cJSON *droot = cJSON_CreateObject();
+    char dname[48];
+    snprintf(dname, sizeof(dname), "%s Watering Duration", CONFIG_HUNTER_HOSTNAME);
+    cJSON_AddStringToObject(droot, "name", dname);
+
+    char duniq[80];
+    snprintf(duniq, sizeof(duniq), "%s_duration", s_unique_prefix);
+    cJSON_AddStringToObject(droot, "uniq_id", duniq);
+
+    char dcmd_t[96];
+    snprintf(dcmd_t, sizeof(dcmd_t), "%s/duration/set", s_topic_prefix);
+    cJSON_AddStringToObject(droot, "cmd_t", dcmd_t);
+
+    char dstat_t[96];
+    snprintf(dstat_t, sizeof(dstat_t), "%s/duration/state", s_topic_prefix);
+    cJSON_AddStringToObject(droot, "stat_t", dstat_t);
+
+    cJSON_AddNumberToObject(droot, "min", 1);
+    cJSON_AddNumberToObject(droot, "max", 240);
+    cJSON_AddNumberToObject(droot, "step", 1);
+    cJSON_AddStringToObject(droot, "ic", "mdi:timer-outline");
+
+    cJSON *ddevice = cJSON_CreateObject();
+    cJSON_AddStringToObject(ddevice, "ids", s_unique_prefix);
+    cJSON_AddStringToObject(ddevice, "name", CONFIG_HUNTER_HOSTNAME);
+    cJSON_AddStringToObject(ddevice, "mf", "Hunter");
+    cJSON_AddStringToObject(ddevice, "mdl", "X2 (via ESP32)");
+    cJSON_AddStringToObject(ddevice, "sw", "hunter-roam-espidf v0.1.0");
+    cJSON_AddItemToObject(droot, "device", ddevice);
+
+    char *djson = cJSON_PrintUnformatted(droot);
+    esp_mqtt_client_publish(s_client, topic, djson, 0, 1, 1);
+    free(djson);
+    cJSON_Delete(droot);
+
+    // Publish current duration state
+    char dur_payload[8];
+    snprintf(dur_payload, sizeof(dur_payload), "%d", s_duration_minutes);
+    char dur_state_topic[96];
+    snprintf(dur_state_topic, sizeof(dur_state_topic), "%s/duration/state", s_topic_prefix);
+    esp_mqtt_client_publish(s_client, dur_state_topic, dur_payload, 0, 1, 1);
+
+    ESP_LOGI(TAG, "HA discovery published: %d zones + duration entity",
+             CONFIG_HUNTER_ZONE_COUNT);
 }
 
 void mqtt_publish_zone_state(uint8_t zone, bool state)
@@ -140,7 +184,7 @@ static void handle_zone_msg(const char *topic, const char *data, int data_len)
     const cJSON *action = cJSON_GetObjectItem(root, "action");
     if (action && cJSON_IsString(action)) {
         if (strcmp(action->valuestring, "start") == 0) {
-            uint8_t minutes = DEFAULT_RUN_MINUTES;
+            uint8_t minutes = s_duration_minutes;
             const cJSON *t = cJSON_GetObjectItem(root, "time");
             if (t && cJSON_IsNumber(t)) {
                 minutes = (uint8_t)t->valuedouble;
@@ -180,6 +224,27 @@ static void handle_cmd_msg(const char *data, int data_len)
     cJSON_Delete(root);
 }
 
+static void handle_duration_msg(const char *data, int data_len)
+{
+    // Payload is a bare number (HA number entity) — e.g. "10".
+    char buf[8];
+    int n = data_len < (int)sizeof(buf) - 1 ? data_len : (int)sizeof(buf) - 1;
+    memcpy(buf, data, n);
+    buf[n] = '\0';
+
+    int val = atoi(buf);
+    if (val >= 1 && val <= 240) {
+        s_duration_minutes = (uint8_t)val;
+        ESP_LOGI(TAG, "duration set to %d minutes", val);
+        // Publish state back so HA's number entity stays in sync.
+        char state_topic[96];
+        snprintf(state_topic, sizeof(state_topic), "%s/duration/state", s_topic_prefix);
+        esp_mqtt_client_publish(s_client, state_topic, buf, 0, 1, 1);
+    } else {
+        ESP_LOGW(TAG, "duration %d out of range [1, 240]", val);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // MQTT event handler
 // ---------------------------------------------------------------------------
@@ -194,17 +259,21 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
     case MQTT_EVENT_CONNECTED: {
         ESP_LOGI(TAG, "connected to broker");
 
-        char sub_zone[80];
+        char sub_zone[96];
         snprintf(sub_zone, sizeof(sub_zone), "%s/zone/+/set", s_topic_prefix);
         esp_mqtt_client_subscribe(s_client, sub_zone, 0);
 
-        char sub_prog[80];
+        char sub_prog[96];
         snprintf(sub_prog, sizeof(sub_prog), "%s/program/+/set", s_topic_prefix);
         esp_mqtt_client_subscribe(s_client, sub_prog, 0);
 
-        char sub_cmd[80];
+        char sub_cmd[96];
         snprintf(sub_cmd, sizeof(sub_cmd), "%s/cmd", s_topic_prefix);
         esp_mqtt_client_subscribe(s_client, sub_cmd, 0);
+
+        char sub_dur[96];
+        snprintf(sub_dur, sizeof(sub_dur), "%s/duration/set", s_topic_prefix);
+        esp_mqtt_client_subscribe(s_client, sub_dur, 0);
 
         publish_ha_discovery();
         break;
@@ -224,6 +293,8 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
             handle_zone_msg(topic, event->data, event->data_len);
         } else if (strstr(topic, "/program/")) {
             handle_program_msg(topic, event->data, event->data_len);
+        } else if (strstr(topic, "/duration/")) {
+            handle_duration_msg(event->data, event->data_len);
         } else if (strstr(topic, "/cmd")) {
             handle_cmd_msg(event->data, event->data_len);
         }

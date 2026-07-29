@@ -54,6 +54,15 @@ static void disarm_safety_timer(uint8_t zone)
 
 static void dispatch_zone_start(uint8_t zone, uint8_t minutes)
 {
+    // Hunter controllers drive one solenoid at a time. Stop all other
+    // zones so HA's switch states reflect the single-zone reality.
+    for (uint8_t z = 1; z <= CONFIG_HUNTER_ZONE_COUNT; z++) {
+        if (z != zone) {
+            mqtt_publish_zone_state(z, false);
+            disarm_safety_timer(z);
+        }
+    }
+
     hunter_err_t err = hunter_rmt_start_zone(zone, minutes);
     if (err == HUNTER_OK) {
         ESP_LOGI(TAG, "zone %u → ON (%u min)", zone, minutes);

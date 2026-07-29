@@ -35,6 +35,15 @@ menu "Hunter WiFi/MQTT"
         help
             Each zone N in [1, ZONE_COUNT] gets a switch entity in HA
             and a software safety-shutoff timer.
+
+    config HUNTER_DEFAULT_RUN_MINUTES
+        int "Default watering duration (minutes)"
+        default 10
+        range 1 240
+        help
+            Used when a start command arrives without an explicit time
+            field. Can be overridden at runtime via the HA number entity
+            "Watering Duration".
 endmenu
 
 menu "Hunter OTA"
