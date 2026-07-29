@@ -103,6 +103,13 @@ static void publish_ha_discovery(void)
     snprintf(duniq, sizeof(duniq), "%s_duration", s_unique_prefix);
     cJSON_AddStringToObject(droot, "uniq_id", duniq);
 
+    // Explicit object_id so HA creates a predictable entity_id
+    // (number.<hostname>_watering_duration) regardless of MAC suffix.
+    char dobj_id[48];
+    snprintf(dobj_id, sizeof(dobj_id), "%s_watering_duration", CONFIG_HUNTER_HOSTNAME);
+    for (char *p = dobj_id; *p; p++) if (*p == '-') *p = '_';
+    cJSON_AddStringToObject(droot, "object_id", dobj_id);
+
     char dcmd_t[96];
     snprintf(dcmd_t, sizeof(dcmd_t), "%s/duration/set", s_topic_prefix);
     cJSON_AddStringToObject(droot, "cmd_t", dcmd_t);
