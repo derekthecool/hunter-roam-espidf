@@ -97,25 +97,26 @@ static void cmd_task(void *arg)
 
     hunter_cmd_t cmd;
     while (1) {
-        if (xQueueReceive(s_queue, &cmd, portMAX_DELAY) != pdTRUE) {
-            continue;
+        // Poll with a finite timeout so we can reset the watchdog periodically
+        // even when no commands arrive — otherwise the WDT fires every 30s
+        // when the queue sits idle (the original portMAX_DELAY bug).
+        if (xQueueReceive(s_queue, &cmd, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            switch (cmd.type) {
+            case HUNTER_CMD_ZONE_START: dispatch_zone_start(cmd.zone, cmd.minutes); break;
+            case HUNTER_CMD_ZONE_STOP:  dispatch_zone_stop(cmd.zone);               break;
+            case HUNTER_CMD_PROGRAM:    dispatch_program(cmd.program);              break;
+            case HUNTER_CMD_STOP_ALL:   dispatch_stop_all();                        break;
+            case HUNTER_CMD_REBOOT:
+                ESP_LOGW(TAG, "reboot requested — restarting in 1s");
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                esp_restart();
+                break;
+            case HUNTER_CMD_OTA:
+                ota_check_and_apply();
+                break;
+            }
         }
         esp_task_wdt_reset();
-
-        switch (cmd.type) {
-        case HUNTER_CMD_ZONE_START: dispatch_zone_start(cmd.zone, cmd.minutes); break;
-        case HUNTER_CMD_ZONE_STOP:  dispatch_zone_stop(cmd.zone);               break;
-        case HUNTER_CMD_PROGRAM:    dispatch_program(cmd.program);              break;
-        case HUNTER_CMD_STOP_ALL:   dispatch_stop_all();                        break;
-        case HUNTER_CMD_REBOOT:
-            ESP_LOGW(TAG, "reboot requested — restarting in 1s");
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            esp_restart();
-            break;
-        case HUNTER_CMD_OTA:
-            ota_check_and_apply();
-            break;
-        }
     }
 }
 
