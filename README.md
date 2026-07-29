@@ -32,41 +32,62 @@ If your Hunter has a `REM` and two `24VAC` terminals in the wiring bay, this fir
 
 | Component | Notes |
 |---|---|
-| **ESP32 dev board** | Any ESP32 variant works (RMT is universal). Tested with ESP32-DevKitC. ESP32-C3 SuperMini (~$3) is a great choice — fits inside the Hunter enclosure. |
-| **USB power supply** | ⚠️ **Must be a floating 2-prong charger** (most phone chargers). NOT an earth-referenced USB hub or grounded supply — see wiring below. |
+| **ESP32 dev board** | Any ESP32 variant works (RMT is universal). Tested on ESP32-DevKitC. |
+| **USB power supply** | Standard 2-prong phone charger (floating, no earth ground). |
 | **2 wires** | ~10 cm each. Any gauge works — signal current is negligible. |
 
 ## Wiring
 
+**Tested and working on Hunter X2** (confirmed all 8 zones toggle correctly):
+
 ```
-        ┌─ Floating 5V USB ─┐
-        │   charger (NOT    │
-        │   earth-referenced│ ← CRITICAL: must be a 2-prong
-        │   — phone charger │   phone charger, not a USB
-        │   is fine)        │   hub with grounded mains
-        └──────┬──────┬─────┘
-           5V (red)  GND (black)
-               │        │
-        ┌──────┴────────┴─────┐
-        │     ESP32 / D1 Mini │
-        │                     │
-        │  GPIO4 (default)GND │ ← GPIO configurable via menuconfig
-        └─────┬──────────┬────┘
-              │          │
-              │          │
-         ┌────┴────┐ ┌───┴─────┐
-         │  REM    │ │  AC2    │ ← Hunter's 24VAC common
-         │terminal │ │terminal │   (one leg of secondary)
-         └─────────┘ └─────────┘
-              ▲
-              └── single signal wire drives the REM pin
-                  (Hunter's 24VAC solenoid driver handles
-                   the actual valve switching)
+    ESP32 5V (VUSB pin) ──────►  rightmost 24VAC terminal
+                                          (next to REM)
+    ESP32 GPIO4         ──────►  REM terminal
+
+    ESP32 GND           ──────►  NOT CONNECTED to Hunter
 ```
 
-**Why the floating supply matters**: The REM port is a 5VDC logic signal referenced to the AC2 (24VAC) terminal. We tie ESP32 GND to AC2 to make the GPIO swing properly against Hunter's logic threshold. If the USB supply has an earth-ground reference (e.g., a USB hub with grounded mains), tying ESP32 GND to AC2 shorts one leg of the 24VAC transformer to earth through the building ground. A standard 2-prong phone charger is floating and safe.
+That's it — **two wires**. ESP32 GND stays floating (referenced only to its own USB supply).
 
-**Why this works without replacing the Hunter board**: the Hunter controller already does the heavy lifting — 24VAC generation, solenoid driving, the physical UI, the stored programs. This firmware just sends commands via the REM pin, like Hunter's own Roam remote would. Everything else on the Hunter keeps working.
+### Why 5V → AC2 (not GND → AC2)
+
+Hunter controllers use **negative voltage internally** — the MCU runs on
+-3.3V or -5V (depending on revision). The REM pin is connected directly
+to the MCU pin through a resistor, so its logic levels are inverted from
+what you'd expect:
+
+| Hunter internal | Voltage relative to AC2 |
+|---|---|
+| Logic HIGH | **0V** (= AC2) |
+| Logic LOW | **-3.3V** (or -5V) |
+
+By tying ESP32's **5V pin** (not GND) to AC2, the ESP32's GND sits at -5V
+relative to AC2, and GPIO swings between 0V (HIGH) and -3.3V (LOW) —
+matching the Hunter's logic levels.
+
+Tying ESP32 GND to AC2 (the "obvious" approach) shifts everything +3.3V
+too high: the Hunter sees constant HIGH and never gets a valid LOW
+transition. **This was the bug that took several days to diagnose.**
+
+### If direct wiring doesn't work on your controller
+
+Some Hunter models have quirky power supply layouts that inject noise
+through the reference wire. If you see ERR messages or no response with
+direct wiring, use an **opto-isolator** (PC817, ~$0.20):
+
+```
+ESP32 GPIO4 ──[330Ω]──► PC817 pin 1 (anode)
+ESP32 GND   ─────────► PC817 pin 2 (cathode)
+PC817 pin 4 (collector) ──► Hunter REM
+PC817 pin 3 (emitter)  ──► Hunter AC2
+```
+
+Enable signal inversion in firmware:
+`idf.py menuconfig` → Hunter RMT → **Invert RMT signal** → ✓
+
+The opto completely isolates the ESP32 from the Hunter — no shared
+reference, no noise coupling, no voltage-level matching needed.
 
 ## Build & flash
 
