@@ -137,37 +137,76 @@ size_t hunter_frame_to_symbols(const uint8_t *frame, size_t frame_len,
 
 #define RMT_RES_HZ  1000000   // 1 µs per tick
 
-static rmt_channel_handle_t s_chan    = NULL;
-static rmt_encoder_handle_t s_encoder = NULL;
-static int                   s_gpio   = -1;
-static int                   s_init_done = 0;
+static rmt_channel_handle_t s_chan       = NULL;
+static rmt_encoder_handle_t s_encoder    = NULL;
+static int                   s_init_done  = 0;
 
-static esp_err_t emit_reset_impulse(int gpio)
+// Fill symbols with a continuous level for `total_us` microseconds.
+// Each RMT symbol can hold up to ~65 ms of continuous level, so long
+// durations (like the 325 ms reset HIGH) are split across multiple
+// symbols — all with the same level.
+static size_t emit_continuous(rmt_symbol_word_t *sym, int level, uint32_t total_us)
 {
-    // Reset is 325 ms HIGH + 65 ms LOW — too long for one RMT item,
-    // so we bit-bang it via GPIO before the RMT burst.
-    gpio_set_direction(gpio, GPIO_MODE_OUTPUT);
-    gpio_set_level(gpio, 1);
-    vTaskDelay(pdMS_TO_TICKS(HUNTER_RESET_HIGH_MS));
-    gpio_set_level(gpio, 0);
-    vTaskDelay(pdMS_TO_TICKS(HUNTER_RESET_LOW_MS));
-    return ESP_OK;
+    size_t count = 0;
+    while (total_us > 0) {
+        uint32_t d0 = total_us > 32767 ? 32767 : total_us;
+        total_us -= d0;
+        uint32_t d1 = total_us > 32767 ? 32767 : total_us;
+        total_us -= d1;
+        sym[count].duration0 = d0;
+        sym[count].level0    = level;
+        sym[count].duration1 = d1;
+        sym[count].level1    = level;
+        count++;
+    }
+    return count;
 }
 
-static esp_err_t emit_symbols(const rmt_symbol_word_t *sym, size_t count)
+// Build the complete RMT symbol stream for one Hunter frame and transmit it.
+// Everything — including the 325 ms reset impulse — goes through the RMT
+// peripheral. Never use gpio_set_level() on the RMT-owned pin; doing so
+// disconnects the RMT's IO_MUX routing and the subsequent bit-bang goes
+// nowhere.
+static hunter_err_t hunter_transmit(const uint8_t *frame, size_t frame_len,
+                                     int extrabit)
 {
+    // Worst case: 5 (reset high) + 1 (reset low) + 1 (start)
+    //           + 120 (15 bytes × 8 bits) + 1 (extra) + 1 (stop) = 129
+    rmt_symbol_word_t sym[140];
+    size_t n = 0;
+
+    // Reset impulse — entirely via RMT, no GPIO direct drive.
+    n += emit_continuous(&sym[n], 1, (uint32_t)HUNTER_RESET_HIGH_MS * 1000);
+    n += emit_continuous(&sym[n], 0, (uint32_t)HUNTER_RESET_LOW_MS  * 1000);
+
+    // Start pulse: 900 µs HIGH, 208 µs LOW.
+    sym[n].duration0 = HUNTER_START_HIGH_US; sym[n].level0 = 1;
+    sym[n].duration1 = HUNTER_START_LOW_US;  sym[n].level1 = 0;
+    n++;
+
+    // Data bits, MSB-first.
+    for (size_t i = 0; i < frame_len; i++) {
+        for (int bit = 7; bit >= 0; bit--) {
+            sym[n++] = bit_symbol((frame[i] >> bit) & 1);
+        }
+    }
+
+    if (extrabit) sym[n++] = bit_symbol(1);
+    sym[n++] = bit_symbol(0);  // stop
+
     rmt_transmit_config_t cfg = { .loop_count = 0 };
     esp_err_t ret = rmt_transmit(s_chan, s_encoder,
-                                  sym, count * sizeof(*sym), &cfg);
+                                  sym, n * sizeof(sym[0]), &cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "rmt_transmit failed: %s", esp_err_to_name(ret));
-        return ret;
+        return HUNTER_ERR_RMT_FAIL;
     }
     ret = rmt_tx_wait_all_done(s_chan, portMAX_DELAY);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "rmt_tx_wait_all_done failed: %s", esp_err_to_name(ret));
+        return HUNTER_ERR_RMT_FAIL;
     }
-    return ret;
+    return HUNTER_OK;
 }
 
 hunter_err_t hunter_rmt_init(int gpio_num)
@@ -190,10 +229,7 @@ hunter_err_t hunter_rmt_init(int gpio_num)
         return HUNTER_ERR_RMT_FAIL;
     }
 
-    // ESP-IDF v6 requires an explicit encoder. The copy encoder just
-    // passes our pre-built symbols through verbatim — exactly what we
-    // want for hand-built bit timings.
-    rmt_copy_encoder_config_t enc_cfg;  // empty struct, no fields to set
+    rmt_copy_encoder_config_t enc_cfg;  // empty struct
     ret = rmt_new_copy_encoder(&enc_cfg, &s_encoder);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "rmt_new_copy_encoder failed: %s", esp_err_to_name(ret));
@@ -202,7 +238,6 @@ hunter_err_t hunter_rmt_init(int gpio_num)
 
     rmt_enable(s_chan);
 
-    s_gpio = gpio_num;
     s_init_done = 1;
     ESP_LOGI(TAG, "RMT TX channel initialised on GPIO %d @ %d Hz",
              gpio_num, RMT_RES_HZ);
@@ -218,20 +253,15 @@ hunter_err_t hunter_rmt_start_zone(uint8_t zone, uint8_t minutes)
     uint8_t frame[15];
     hunter_build_zone_frame(zone, minutes, frame);
 
-    rmt_symbol_word_t sym[125];
-    size_t n = hunter_frame_to_symbols(frame, 15, /*extrabit=*/1, sym, 125);
-
-    emit_reset_impulse(s_gpio);
-    esp_err_t ret = emit_symbols(sym, n);
-    if (ret != ESP_OK) return HUNTER_ERR_RMT_FAIL;
-
-    ESP_LOGI(TAG, "zone %u started for %u min", zone, minutes);
-    return HUNTER_OK;
+    hunter_err_t err = hunter_transmit(frame, 15, /*extrabit=*/1);
+    if (err == HUNTER_OK) {
+        ESP_LOGI(TAG, "zone %u started for %u min", zone, minutes);
+    }
+    return err;
 }
 
 hunter_err_t hunter_rmt_stop_zone(uint8_t zone)
 {
-    // Stop == start with time = 0.
     return hunter_rmt_start_zone(zone, 0);
 }
 
@@ -243,15 +273,11 @@ hunter_err_t hunter_rmt_run_program(uint8_t program_num)
     uint8_t frame[7];
     hunter_build_program_frame(program_num, frame);
 
-    rmt_symbol_word_t sym[64];
-    size_t n = hunter_frame_to_symbols(frame, 7, /*extrabit=*/0, sym, 64);
-
-    emit_reset_impulse(s_gpio);
-    esp_err_t ret = emit_symbols(sym, n);
-    if (ret != ESP_OK) return HUNTER_ERR_RMT_FAIL;
-
-    ESP_LOGI(TAG, "program %u triggered", program_num);
-    return HUNTER_OK;
+    hunter_err_t err = hunter_transmit(frame, 7, /*extrabit=*/0);
+    if (err == HUNTER_OK) {
+        ESP_LOGI(TAG, "program %u triggered", program_num);
+    }
+    return err;
 }
 
 #else  // CONFIG_IDF_TARGET_LINUX — host stubs for the public-API tests
