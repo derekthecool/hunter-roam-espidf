@@ -22,6 +22,15 @@
 #include "freertos/task.h"
 #endif
 
+// Logic levels — respect CONFIG_HUNTER_RMT_INVERT for opto-isolator use.
+#ifdef CONFIG_HUNTER_RMT_INVERT
+#define HUNTER_RMT_HIGH  0
+#define HUNTER_RMT_LOW   1
+#else
+#define HUNTER_RMT_HIGH  1
+#define HUNTER_RMT_LOW   0
+#endif
+
 static const char *TAG = "hunter_rmt";
 
 // ---------------------------------------------------------------------------
@@ -87,10 +96,10 @@ static rmt_symbol_word_t bit_symbol(int is_one)
 {
     // One Hunter bit → one RMT symbol (two phases).
     return is_one
-        ? (rmt_symbol_word_t){ .duration0 = HUNTER_BIT1_HIGH_US, .level0 = 1,
-                                .duration1 = HUNTER_BIT1_LOW_US,  .level1 = 0 }
-        : (rmt_symbol_word_t){ .duration0 = HUNTER_BIT0_HIGH_US, .level0 = 1,
-                                .duration1 = HUNTER_BIT0_LOW_US,  .level1 = 0 };
+        ? (rmt_symbol_word_t){ .duration0 = HUNTER_BIT1_HIGH_US, .level0 = HUNTER_RMT_HIGH,
+                                .duration1 = HUNTER_BIT1_LOW_US,  .level1 = HUNTER_RMT_LOW }
+        : (rmt_symbol_word_t){ .duration0 = HUNTER_BIT0_HIGH_US, .level0 = HUNTER_RMT_HIGH,
+                                .duration1 = HUNTER_BIT0_LOW_US,  .level1 = HUNTER_RMT_LOW };
 }
 
 size_t hunter_frame_to_symbols(const uint8_t *frame, size_t frame_len,
@@ -107,8 +116,8 @@ size_t hunter_frame_to_symbols(const uint8_t *frame, size_t frame_len,
 
     // Start pulse: 900 µs HIGH, 208 µs LOW.
     out[n++] = (rmt_symbol_word_t){
-        .duration0 = HUNTER_START_HIGH_US, .level0 = 1,
-        .duration1 = HUNTER_START_LOW_US,  .level1 = 0,
+        .duration0 = HUNTER_START_HIGH_US, .level0 = HUNTER_RMT_HIGH,
+        .duration1 = HUNTER_START_LOW_US,  .level1 = HUNTER_RMT_LOW,
     };
 
     // Bits, MSB-first within each byte.
@@ -176,12 +185,12 @@ static hunter_err_t hunter_transmit(const uint8_t *frame, size_t frame_len,
     size_t n = 0;
 
     // Reset impulse — entirely via RMT, no GPIO direct drive.
-    n += emit_continuous(&sym[n], 1, (uint32_t)HUNTER_RESET_HIGH_MS * 1000);
-    n += emit_continuous(&sym[n], 0, (uint32_t)HUNTER_RESET_LOW_MS  * 1000);
+    n += emit_continuous(&sym[n], HUNTER_RMT_HIGH, (uint32_t)HUNTER_RESET_HIGH_MS * 1000);
+    n += emit_continuous(&sym[n], HUNTER_RMT_LOW,  (uint32_t)HUNTER_RESET_LOW_MS  * 1000);
 
     // Start pulse: 900 µs HIGH, 208 µs LOW.
-    sym[n].duration0 = HUNTER_START_HIGH_US; sym[n].level0 = 1;
-    sym[n].duration1 = HUNTER_START_LOW_US;  sym[n].level1 = 0;
+    sym[n].duration0 = HUNTER_START_HIGH_US; sym[n].level0 = HUNTER_RMT_HIGH;
+    sym[n].duration1 = HUNTER_START_LOW_US;  sym[n].level1 = HUNTER_RMT_LOW;
     n++;
 
     // Data bits, MSB-first.

@@ -5,4 +5,13 @@ menu "Hunter RMT"
         help
             The GPIO that drives the Hunter controller's REM terminal.
             Default is GPIO 4 — any free output-capable GPIO works.
+
+    config HUNTER_RMT_INVERT
+        bool "Invert RMT signal (for opto-isolator)"
+        default n
+        help
+            Inverts the logic level of every RMT symbol. Enable this if
+            you're driving the REM pin through an opto-isolator (PC817,
+            TLP281, etc.) which inverts the signal: ESP32 HIGH → LED on
+            → transistor conducts → REM pulled LOW.
 endmenu
